@@ -10,7 +10,7 @@ A clean, Apple TV-style home screen for Fire OS 7 TVs (built for the Fire TV 4-S
 - **A cat** ([oneko](https://github.com/adryd325/oneko.js)) wanders along the bottom, sits, yawns and naps.
 - **Home button** opens this screen instead of Amazon's. **Double-press Home** to stay on Amazon's.
 
-![The home screen on a Fire TV 4-Series](docs/screenshot.png)
+![The home screen on a Fire TV 4-Series (Continue Watching blurred)](docs/screenshot.png)
 
 **Full step-by-step install guide: [INSTALL.md](INSTALL.md).** The short version is below.
 
