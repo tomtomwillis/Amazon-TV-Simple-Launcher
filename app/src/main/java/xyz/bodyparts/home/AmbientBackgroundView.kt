@@ -1,6 +1,8 @@
 package xyz.bodyparts.home
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -11,9 +13,11 @@ import android.view.View
 import kotlin.math.PI
 import kotlin.math.max
 import kotlin.math.sin
+import kotlin.random.Random
 
 /**
- * A black background with a few soft, faint glows drifting slowly around it.
+ * A black background with a few soft, faint glows drifting slowly around it, under a
+ * fine film grain.
  *
  * Each glow's gradient is built once and only moved, and it redraws at 30 fps only
  * while the home screen is on show, so it stays cheap on the TV's GPU.
@@ -34,11 +38,23 @@ class AmbientBackgroundView(context: Context) : View(context) {
     }
 
     private val glows = listOf(
-        Glow(Color.argb(70, 70, 100, 210), 0.55f, 71f, 53f, 0.0f, 1.3f),  // blue
-        Glow(Color.argb(55, 140, 80, 200), 0.45f, 89f, 61f, 2.1f, 0.4f),  // violet
-        Glow(Color.argb(45, 40, 160, 170), 0.40f, 103f, 79f, 4.0f, 2.7f), // teal
-        Glow(Color.argb(35, 200, 120, 170), 0.35f, 127f, 97f, 1.0f, 5.1f), // rose
+        Glow(Color.argb(80, 0x29, 0x7f, 0xef), 0.55f, 71f, 53f, 0.0f, 1.3f),  // blue #297fef
+        Glow(Color.argb(45, 0xb3, 0xb6, 0xc5), 0.45f, 89f, 61f, 2.1f, 0.4f),  // silver #b3b6c5
+        Glow(Color.argb(60, 0x29, 0x7f, 0xef), 0.40f, 103f, 79f, 4.0f, 2.7f), // blue
+        Glow(Color.argb(35, 0xb3, 0xb6, 0xc5), 0.35f, 127f, 97f, 1.0f, 5.1f), // silver
     )
+
+    /** Film grain over the glows: a small random tile, repeated across the screen. */
+    private val grain = Paint().apply {
+        val size = GRAIN_TILE
+        val random = Random(7)
+        val pixels = IntArray(size * size) {
+            val v = random.nextInt(256)
+            Color.argb(random.nextInt(GRAIN_MAX_ALPHA), v, v, v)
+        }
+        val tile = Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888)
+        shader = BitmapShader(tile, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+    }
 
     private var running = false
     private val startedAt = SystemClock.uptimeMillis()
@@ -72,6 +88,7 @@ class AmbientBackgroundView(context: Context) : View(context) {
             canvas.drawCircle(0f, 0f, g.radius, g.paint)
             canvas.restore()
         }
+        canvas.drawPaint(grain)
         if (running) postInvalidateDelayed(FRAME_MS)
     }
 
@@ -88,5 +105,7 @@ class AmbientBackgroundView(context: Context) : View(context) {
 
     private companion object {
         const val FRAME_MS = 33L
+        const val GRAIN_TILE = 256
+        const val GRAIN_MAX_ALPHA = 22
     }
 }

@@ -3,7 +3,8 @@
 A clean, Apple TV-style home screen for Fire OS 7 TVs (built for the Fire TV 4-Series, `AMZ_4k55N400U`).
 
 - **Row 1 – Apps.** The apps you choose, in the order you choose, shown with their banners. Tiles grow when selected and the name fades in underneath.
-- **Row 2 – TV Inputs.** The TV's HDMI, composite and aerial inputs, then a **Fire TV** tile (Amazon's own home screen) and **Settings**.
+- **Row 2 – Continue Watching** (optional) from a [Jellyfin](https://jellyfin.org) server, with progress bars. Selecting an item resumes it in [Wholphin](https://github.com/damontecres/Wholphin). Set it up with Menu (☰) → *Jellyfin Continue Watching: Connect…*, enter the server address, and approve the code shown under Quick Connect in any signed-in Jellyfin app.
+- **Row 3 – TV Inputs.** The TV's HDMI, composite and aerial inputs, then a **Fire TV** tile (Amazon's own home screen) and **Settings**.
 - **Black background** with soft glows drifting slowly behind everything.
 - **HDMI and composite inputs** open full screen, straight from their tiles.
 - **A cat** ([oneko](https://github.com/adryd325/oneko.js)) wanders along the bottom, sits, yawns and naps.
@@ -49,6 +50,8 @@ Fire OS won't let another app be the default home screen, and it handles Home be
 | Home | Opens this home screen |
 | Home, Home (quickly) | Stay on Amazon's home screen |
 | Hold Home | Fire TV's quick menu, as usual |
+| OK on a Continue Watching item | Resume it in Wholphin |
+| Menu (☰) on a Continue Watching item | Resume, play from the beginning, or show in Wholphin |
 | Menu (☰) on an app | Move (◀ ▶ then OK), hide, choose apps to show, app info |
 | Menu (☰) anywhere else | Home button on/off, choose apps to show, reorder apps, cat on/off |
 | Back | Nothing (it's the home screen) |
@@ -71,6 +74,7 @@ app/src/main/java/xyz/bodyparts/home/
   CatView.kt           the cat
   AmbientBackgroundView.kt  the black background with drifting glows
   RowScroller.kt       keeps the selected tile inside the row's margins
+  JellyfinClient.kt    Quick Connect sign-in and the Continue Watching list
   InputPlayerActivity.kt    full-screen HDMI / composite input
   HomeCatchService.kt  the Home-button helper (accessibility service)
   HomePressWatcher.kt  spots Home presses in the system log

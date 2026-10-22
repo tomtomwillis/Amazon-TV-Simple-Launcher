@@ -24,13 +24,17 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextClock
 import android.widget.TextView
 import android.widget.Toast
@@ -54,6 +58,9 @@ class MainActivity : Activity() {
     private lateinit var prefs: Prefs
     private lateinit var appsRow: LinearLayout
     private lateinit var inputsRow: LinearLayout
+    private lateinit var continueLabel: TextView
+    private lateinit var continueScroller: RowScroller
+    private lateinit var continueRow: LinearLayout
     private lateinit var cat: CatView
     private lateinit var moveHint: TextView
 
@@ -68,6 +75,11 @@ class MainActivity : Activity() {
     /** App loading runs here, off the UI thread. lookCache is only touched on this thread. */
     private val loader = Executors.newSingleThreadExecutor()
     private val lookCache = HashMap<String, AppLook>()
+
+    /** Jellyfin requests run here. Artwork is kept by URL (which includes the image tag). */
+    private val net = Executors.newSingleThreadExecutor()
+    private val artCache = HashMap<String, Bitmap>()
+    private var continueLoadedAt = 0L
 
     private val packageReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
@@ -97,12 +109,14 @@ class MainActivity : Activity() {
         buildInputsRow()
         inputsRow.getChildAt(0)?.requestFocus()
         loadApps()
+        loadContinueWatching()
     }
 
     override fun onDestroy() {
         unregisterReceiver(packageReceiver)
         tvInputManager()?.unregisterCallback(inputCallback)
         loader.shutdownNow()
+        net.shutdownNow()
         super.onDestroy()
     }
 
@@ -111,12 +125,15 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         HomeState.bypass = false
+        // Progress changes after watching something, so this row is the exception
+        if (SystemClock.uptimeMillis() - continueLoadedAt > CONTINUE_REFRESH_MS) loadContinueWatching()
     }
 
     // ---------- Layout ----------
 
     private fun buildUi(): View {
-        val root = FrameLayout(this).apply { clipChildren = false }
+        // Clips its children, so rows scrolled up disappear under the date and time
+        val root = FrameLayout(this)
         // Black with drifting glows, behind everything else
         root.addView(AmbientBackgroundView(this), FrameLayout.LayoutParams(MATCH, MATCH))
 
@@ -124,19 +141,19 @@ class MainActivity : Activity() {
             format12Hour = "EEEE d MMMM"
             format24Hour = "EEEE d MMMM"
             setTextColor(Color.argb(170, 255, 255, 255))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
         }, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply {
-            setMargins(dp(64), dp(44), 0, 0)
+            setMargins(dp(64), dp(30), 0, 0)
         })
 
         root.addView(TextClock(this).apply {
             format12Hour = "h:mm"
             format24Hour = "HH:mm"
             setTextColor(Color.WHITE)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 34f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 26f)
             typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
         }, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.END).apply {
-            setMargins(0, dp(34), dp(64), 0)
+            setMargins(0, dp(22), dp(64), 0)
         })
 
         moveHint = TextView(this).apply {
@@ -150,31 +167,46 @@ class MainActivity : Activity() {
             visibility = View.GONE
         }
         root.addView(moveHint, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-            topMargin = dp(110)
+            topMargin = dp(70)
         })
 
-        // Added before the rows so tiles and their names draw over the cat
-        cat = CatView(this).apply { visibility = if (prefs.catEnabled) View.VISIBLE else View.GONE }
-        root.addView(cat, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply {
-            bottomMargin = dp(6)
-        })
 
         appsRow = newRow()
         inputsRow = newRow()
         // Hold the apps row's space while apps load, so the inputs row doesn't jump.
-        appsRow.minimumHeight = dp(16 + APP_H + 14 + 22 + 2)
+        appsRow.minimumHeight = dp(16 + APP_H + 2)
+
+        continueRow = newRow()
+        continueLabel = sectionLabel("Continue Watching").apply { visibility = View.GONE }
+        continueScroller = scroller(continueRow).apply { visibility = View.GONE }
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             clipChildren = false
             clipToPadding = false
+            setPadding(0, 0, 0, dp(24))
             addView(sectionLabel("Apps"))
             addView(scroller(appsRow))
+            addView(continueLabel)
+            addView(continueScroller)
             addView(sectionLabel("TV Inputs"))
             addView(scroller(inputsRow))
         }
-        root.addView(content, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply {
-            bottomMargin = dp(36)
+        // Three rows don't fit on a TV screen, so the rows scroll under the date and time
+        val rows = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            isVerticalFadingEdgeEnabled = true
+            setFadingEdgeLength(dp(28))
+            addView(content)
+        }
+        root.addView(rows, FrameLayout.LayoutParams(MATCH, MATCH).apply {
+            topMargin = dp(62)
+        })
+
+        // Added last so the cat is always on top of the rows
+        cat = CatView(this).apply { visibility = if (prefs.catEnabled) View.VISIBLE else View.GONE }
+        root.addView(cat, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply {
+            bottomMargin = dp(6)
         })
         return root
     }
@@ -224,7 +256,7 @@ class MainActivity : Activity() {
     }
 
     private fun findTile(key: String): View? {
-        for (row in listOf(appsRow, inputsRow)) {
+        for (row in listOf(appsRow, inputsRow, continueRow)) {
             for (i in 0 until row.childCount) {
                 val v = row.getChildAt(i)
                 if (v is TileView && v.key == key) return v
@@ -324,7 +356,7 @@ class MainActivity : Activity() {
 
         appsRow.removeAllViews()
         for (app in visibleApps) {
-            val tile = TileView(this, "app:${app.pkg}", app.label, dp(APP_W), dp(APP_H))
+            val tile = TileView(this, "app:${app.pkg}", app.label, dp(APP_W), dp(APP_H), showCaption = false)
             if (app.banner != null) tile.setBanner(app.banner) else tile.setIconAndName(app.icon, app.label)
             tile.setOnClickListener { launchApp(app) }
             if (app.pkg == movingPkg) tile.setMoving(true)
@@ -502,6 +534,8 @@ class MainActivity : Activity() {
         val tile = currentFocus as? TileView
         if (tile != null && tile.key.startsWith("app:")) {
             appMenu(tile.key.removePrefix("app:"), tile.title)
+        } else if (tile != null && tile.key.startsWith("jf:")) {
+            continueMenu(tile)
         } else {
             settingsMenu()
         }
@@ -531,6 +565,8 @@ class MainActivity : Activity() {
             "Reorder apps…",
             "Reset app order",
             if (catOn) "Cat: On" else "Cat: Off",
+            if (prefs.jellyfinToken == null) "Jellyfin Continue Watching: Connect…"
+            else "Jellyfin Continue Watching: Disconnect",
             "Open Amazon home screen",
         )
         val title = if (isCatchServiceEnabled()) "Home screen"
@@ -551,9 +587,194 @@ class MainActivity : Activity() {
                     prefs.catEnabled = !catOn
                     cat.visibility = if (!catOn) View.VISIBLE else View.GONE
                 }
-                5 -> openStockHome()
+                5 -> if (prefs.jellyfinToken == null) connectJellyfin() else disconnectJellyfin()
+                6 -> openStockHome()
             }
         }.show()
+    }
+
+    // ---------- Continue Watching (Jellyfin, played in Wholphin) ----------
+
+    private fun jellyfin(): JellyfinClient? {
+        val server = prefs.jellyfinServer ?: return null
+        return JellyfinClient(server, prefs.deviceId, prefs.jellyfinToken)
+    }
+
+    /** Fetches the resume list and its artwork in the background, then rebuilds the row. */
+    private fun loadContinueWatching() {
+        val client = jellyfin()
+        val userId = prefs.jellyfinUserId
+        if (client == null || prefs.jellyfinToken == null || userId == null) {
+            showContinueRow(emptyList(), emptyMap())
+            return
+        }
+        continueLoadedAt = SystemClock.uptimeMillis()
+        net.execute {
+            val items = try {
+                client.continueWatching(userId)
+            } catch (e: Exception) {
+                Log.w(TAG, "couldn't load Continue Watching", e)
+                return@execute // keep whatever is showing; the server may just be asleep
+            }
+            val art = HashMap<String, Bitmap>()
+            for (item in items) {
+                val url = item.imageUrl ?: continue
+                val bmp = artCache[url] ?: try { client.image(url, dp(CARD_W)) } catch (e: Exception) { null }
+                if (bmp != null) art[url] = bmp
+            }
+            artCache.clear()
+            artCache.putAll(art)
+            runOnUiThread { if (!isDestroyed) showContinueRow(items, art) }
+        }
+    }
+
+    private fun showContinueRow(items: List<JellyfinClient.ResumeItem>, art: Map<String, Bitmap>) {
+        val visible = if (items.isEmpty()) View.GONE else View.VISIBLE
+        continueLabel.visibility = visible
+        continueScroller.visibility = visible
+        keepingFocus {
+            continueRow.removeAllViews()
+            for (item in items) {
+                val name = listOfNotNull(item.title, item.subtitle).joinToString("  ·  ")
+                val tile = TileView(this, "jf:${item.id}", name, dp(CARD_W), dp(CARD_H))
+                tile.tag = item
+                val bmp = item.imageUrl?.let { art[it] }
+                if (bmp != null) tile.setBanner(BitmapDrawable(resources, bmp)) else tile.setIconAndName(null, item.title)
+                tile.setProgress(item.progress)
+                tile.setOnClickListener { playInWholphin(item, fromStart = false) }
+                continueRow.addView(spaced(tile))
+            }
+            pinRowEnds(continueRow)
+        }
+    }
+
+    private fun playInWholphin(item: JellyfinClient.ResumeItem, fromStart: Boolean) {
+        val intent = Intent(WHOLPHIN_PLAY)
+            .setComponent(ComponentName(WHOLPHIN, "$WHOLPHIN.MainActivity"))
+            .putExtra("itemId", item.id)
+            .putExtra("position", if (fromStart) 0L else item.positionMs)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        start(intent, "Wholphin")
+    }
+
+    private fun showInWholphin(item: JellyfinClient.ResumeItem) {
+        val intent = Intent(Intent.ACTION_VIEW)
+            .setComponent(ComponentName(WHOLPHIN, "$WHOLPHIN.MainActivity"))
+            .putExtra("itemId", item.id)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        start(intent, "Wholphin")
+    }
+
+    private fun continueMenu(tile: TileView) {
+        val item = tile.tag as? JellyfinClient.ResumeItem ?: return
+        val items = arrayOf("Resume", "Play from the beginning", "Show in Wholphin", "Home screen settings…")
+        dialog().setTitle(tile.title).setItems(items) { _, which ->
+            when (which) {
+                0 -> playInWholphin(item, fromStart = false)
+                1 -> playInWholphin(item, fromStart = true)
+                2 -> showInWholphin(item)
+                3 -> settingsMenu()
+            }
+        }.show()
+    }
+
+    /** Asks for the server address, then signs in with a Quick Connect code. */
+    private fun connectJellyfin() {
+        val field = EditText(this).apply {
+            setText(prefs.jellyfinServer ?: "http://")
+            setSelection(text.length)
+            setSingleLine()
+        }
+        val dlg = dialog().setTitle("Jellyfin server address")
+            .setMessage("As you'd type it into a browser, e.g. http://192.168.1.20:8096")
+            .setView(FrameLayout(this).apply {
+                setPadding(dp(24), dp(8), dp(24), 0)
+                addView(field)
+            })
+            .setPositiveButton("Next") { _, _ -> startQuickConnect(JellyfinClient.normalise(field.text.toString())) }
+            .setNegativeButton("Cancel", null)
+            .show()
+        // The on-screen keyboard's own Next/Done key submits too
+        field.imeOptions = EditorInfo.IME_ACTION_DONE
+        field.setOnEditorActionListener { _, _, _ ->
+            dlg.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
+            true
+        }
+    }
+
+    private fun startQuickConnect(server: String) {
+        val client = JellyfinClient(server, prefs.deviceId)
+        net.execute {
+            val result = try {
+                client.serverName() to client.startQuickConnect()
+            } catch (e: Exception) {
+                Log.w(TAG, "Quick Connect failed to start", e)
+                null
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                if (result == null) {
+                    toast("Couldn't reach Jellyfin (or Quick Connect is off) at $server")
+                } else {
+                    showQuickConnectCode(server, result.first, result.second)
+                }
+            }
+        }
+    }
+
+    /** Shows the code and polls until it's approved, cancelled, or too old. */
+    private fun showQuickConnectCode(server: String, serverName: String, qc: JellyfinClient.QuickConnect) {
+        val client = JellyfinClient(server, prefs.deviceId)
+        val started = SystemClock.uptimeMillis()
+        var waiting = true
+        val dlg = dialog().setTitle("Quick Connect: ${qc.code}")
+            .setMessage(
+                "On a phone or computer signed in to $serverName, open your profile, choose " +
+                    "Quick Connect and enter:\n\n${qc.code}"
+            )
+            .setNegativeButton("Cancel", null)
+            .setOnDismissListener { waiting = false }
+            .show()
+        val handler = Handler(Looper.getMainLooper())
+        val poll = object : Runnable {
+            override fun run() {
+                if (!waiting || isDestroyed) return
+                if (SystemClock.uptimeMillis() - started > QUICK_CONNECT_TIMEOUT_MS) {
+                    dlg.dismiss()
+                    toast("Quick Connect code expired")
+                    return
+                }
+                val again = this
+                net.execute {
+                    val login = try {
+                        if (client.isQuickConnectApproved(qc.secret)) client.finishQuickConnect(qc.secret) else null
+                    } catch (e: Exception) {
+                        null
+                    }
+                    runOnUiThread {
+                        if (!waiting || isDestroyed) return@runOnUiThread
+                        if (login == null) {
+                            handler.postDelayed(again, QUICK_CONNECT_POLL_MS)
+                            return@runOnUiThread
+                        }
+                        prefs.jellyfinServer = server
+                        prefs.jellyfinToken = login.token
+                        prefs.jellyfinUserId = login.userId
+                        dlg.dismiss()
+                        toast("Connected to $serverName")
+                        loadContinueWatching()
+                    }
+                }
+            }
+        }
+        handler.postDelayed(poll, QUICK_CONNECT_POLL_MS)
+    }
+
+    private fun disconnectJellyfin() {
+        prefs.jellyfinToken = null
+        prefs.jellyfinUserId = null
+        artCache.clear()
+        showContinueRow(emptyList(), emptyMap())
     }
 
     /** Lists the row in order; picking an app starts moving it. */
@@ -617,13 +838,23 @@ class MainActivity : Activity() {
     private companion object {
         const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
-        const val APP_W = 208
-        const val APP_H = 117
+        const val APP_W = 184
+        const val APP_H = 104
+        const val CARD_W = 208
+        const val CARD_H = 117
         const val INPUT_W = 176
         const val INPUT_H = 99
         const val ICON = 52
 
         const val SETTINGS_GRACE_MS = 3000L
+
+        const val TAG = "Home"
+
+        const val WHOLPHIN = "com.github.damontecres.wholphin"
+        const val WHOLPHIN_PLAY = "$WHOLPHIN.PLAYBACK"
+        const val CONTINUE_REFRESH_MS = 15_000L
+        const val QUICK_CONNECT_POLL_MS = 2000L
+        const val QUICK_CONNECT_TIMEOUT_MS = 5 * 60_000L
 
         const val AMAZON_LIVE_TV = "com.amazon.tv.livetv"
 

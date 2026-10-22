@@ -35,6 +35,26 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("cat", true)
         set(v) = sp.edit().putBoolean("cat", v).apply()
 
+    /** Jellyfin server for the Continue Watching row, e.g. "http://192.168.1.20:8096". */
+    var jellyfinServer: String?
+        get() = sp.getString("jf_server", null)
+        set(v) = sp.edit().putString("jf_server", v).apply()
+
+    /** Access token and user from Quick Connect; null when not signed in. */
+    var jellyfinToken: String?
+        get() = sp.getString("jf_token", null)
+        set(v) = sp.edit().putString("jf_token", v).apply()
+
+    var jellyfinUserId: String?
+        get() = sp.getString("jf_user", null)
+        set(v) = sp.edit().putString("jf_user", v).apply()
+
+    /** Stable id this TV uses with Jellyfin, so its sign-in shows as one device. */
+    val deviceId: String
+        get() = sp.getString("device_id", null) ?: java.util.UUID.randomUUID().toString().also {
+            sp.edit().putString("device_id", it).apply()
+        }
+
     /** App order, as package names. Apps not listed are added alphabetically at the end. */
     var order: List<String>
         get() = (sp.getString("order", "") ?: "").split(',').filter { it.isNotEmpty() }

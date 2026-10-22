@@ -7,6 +7,9 @@
         android:name="android.permission.READ_LOGS"
         tools:ignore="ProtectedPermissions" />
 
+    <!-- Continue Watching row: talks to a Jellyfin server, often plain http on the home network -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
@@ -15,7 +18,8 @@
         android:banner="@drawable/banner"
         android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
-        android:theme="@style/HomeTheme">
+        android:theme="@style/HomeTheme"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"

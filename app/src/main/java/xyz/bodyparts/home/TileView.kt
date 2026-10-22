@@ -22,8 +22,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
- * An Apple TV-style tile: a rounded card that lifts and grows when focused,
- * with its name fading in underneath.
+ * An Apple TV-style tile: a rounded card that lifts, grows and gets a coloured ring
+ * when focused, optionally with its name fading in underneath.
  */
 class TileView(
     context: Context,
@@ -31,11 +31,19 @@ class TileView(
     val title: String,
     widthPx: Int,
     heightPx: Int,
+    private val showCaption: Boolean = true,
 ) : LinearLayout(context) {
 
     private val card = FrameLayout(context)
+    private val cardWidth = widthPx
     private val caption = TextView(context)
     private val radius = dp(14f)
+    private var moving = false
+
+    private val focusRing = GradientDrawable().apply {
+        cornerRadius = radius
+        setStroke(dp(3f).toInt(), FOCUS_COLOR)
+    }
 
     init {
         orientation = VERTICAL
@@ -53,6 +61,10 @@ class TileView(
         card.elevation = dp(2f)
         addView(card, LayoutParams(widthPx, heightPx))
 
+        if (showCaption) addCaption(widthPx)
+    }
+
+    private fun addCaption(widthPx: Int) {
         caption.text = title
         caption.setTextColor(Color.WHITE)
         caption.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
@@ -67,6 +79,7 @@ class TileView(
 
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
+        if (!moving) card.foreground = if (gainFocus) focusRing else null
         val scale = if (gainFocus) 1.12f else 1f
         card.animate()
             .scaleX(scale).scaleY(scale)
@@ -74,6 +87,7 @@ class TileView(
             .setDuration(160)
             .setInterpolator(DecelerateInterpolator())
             .start()
+        if (!showCaption) return
         caption.animate()
             .alpha(if (gainFocus) 1f else 0f)
             .translationY(if (gainFocus) dp(6f) else 0f)
@@ -85,10 +99,11 @@ class TileView(
 
     /** Picked up to be moved: outlined and gently wiggling, like Apple TV. */
     fun setMoving(moving: Boolean) {
+        this.moving = moving
         wiggle?.cancel()
         wiggle = null
         card.rotation = 0f
-        card.foreground = null
+        card.foreground = if (isFocused) focusRing else null
         if (!moving) return
         card.foreground = GradientDrawable().apply {
             cornerRadius = radius
@@ -167,6 +182,30 @@ class TileView(
         card.addView(box, FrameLayout.LayoutParams(MATCH, MATCH))
     }
 
+    /** How far through something is (0..1), as a bar along the bottom of the card. */
+    fun setProgress(fraction: Float) {
+        if (fraction <= 0f) return
+        val inset = dp(12f).toInt()
+        val height = dp(4f).toInt()
+        val track = FrameLayout(context).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = height / 2f
+                setColor(Color.argb(110, 0, 0, 0))
+            }
+        }
+        val bar = View(context).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = height / 2f
+                setColor(Color.WHITE)
+            }
+        }
+        val barWidth = ((cardWidth - 2 * inset) * fraction.coerceIn(0f, 1f)).toInt()
+        track.addView(bar, FrameLayout.LayoutParams(barWidth, MATCH))
+        card.addView(track, FrameLayout.LayoutParams(MATCH, height, Gravity.BOTTOM).apply {
+            setMargins(inset, 0, inset, inset)
+        })
+    }
+
     private fun rounded(color: Int) = GradientDrawable().apply {
         cornerRadius = radius
         setColor(color)
@@ -176,5 +215,8 @@ class TileView(
 
     private companion object {
         const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
+
+        /** Ring around the selected tile: a soft periwinkle to go with the background glows. */
+        val FOCUS_COLOR = Color.rgb(140, 160, 255)
     }
 }
