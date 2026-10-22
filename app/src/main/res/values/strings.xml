@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Home</string>
+    <string name="a11y_label">Home button</string>
+    <string name="a11y_desc">Opens your custom home screen when you press the Home button. Double-press Home to reach the Amazon home screen.</string>
+</resources>
